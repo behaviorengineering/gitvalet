@@ -43,11 +43,11 @@ cmd := exec.Command("git", "-C", dir, "rev-parse", "HEAD")
 
 ## Quality gates
 
-Run from module root: `make hooks-install` (once per clone), `make help`, `make tidy`, `make fmt`, `make vet`, `make test`, `make build`, `make smoke`.
+Run from module root: `go tool task hooks-install` (once per clone), `go tool task --list`, `go tool task tidy`, `go tool task format`, `go tool task lint`, `go tool task vet`, `go tool task test`, `go tool task build`, `go tool task smoke`.
 
-**CONSTRAINT:** MUST run `make hooks-install` before the first commit in a new clone so `.githooks/pre-commit` formats staged Go files.
+**CONSTRAINT:** MUST run `go tool task hooks-install` before the first commit in a new clone so `.githooks/pre-commit` formats staged Go files.
 - Enforcement: `git config --get core.hooksPath` is `.githooks`
-- Violation: STOP, run `make hooks-install`, then commit
+- Violation: STOP, run `go tool task hooks-install`, then commit
 
 ## Pre-completion verification
 
@@ -56,6 +56,6 @@ Run from module root: `make hooks-install` (once per clone), `make help`, `make 
       Pass: No grab-bag `util` packages
       Fail: STOP, move to domain package
 - [ ] **CLI surface:** Bare `gitvalet` prints agent guide; `version` needs no config
-      Method: `make smoke`
+      Method: `go tool task smoke`
       Pass: smoke target exits 0
       Fail: STOP, fix internal/cli before merge

@@ -27,51 +27,45 @@ jobs:
           GOWORK: off
         run: |
           cp go.mod go.mod.bak && cp go.sum go.sum.bak
-          go mod tidy
+          go tool task tidy
           diff -u go.mod.bak go.mod
           diff -u go.sum.bak go.sum
           rm -f go.mod.bak go.sum.bak
 
-      - name: gofmt
+      - name: Format check
+        env:
+          GOWORK: off
         run: |
-          unformatted=$(gofmt -l .)
+          unformatted=$(go tool gofumpt -l ./cmd ./internal ./pkg)
           if [ -n "$unformatted" ]; then
             echo "$unformatted"
             exit 1
           fi
 
-      - name: go vet
+      - name: Vet
         env:
           GOWORK: off
-        run: go vet ./...
+        run: go tool task vet
 
-      - name: golangci-lint
+      - name: Lint
         env:
           GOWORK: off
-        run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
-          golangci-lint run ./...
+        run: go tool task lint
 
-      - name: go test
+      - name: Test
         env:
           GOWORK: off
-        run: go test -race -count=1 ./...
+        run: go tool task test
 
-      - name: go build
+      - name: Build
         env:
           GOWORK: off
-        run: go build ./...
+        run: go tool task build
 
       - name: CLI smoke
         env:
           GOWORK: off
-        run: |
-          go build -o gitvalet ./cmd/gitvalet
-          ./gitvalet
-          ./gitvalet help
-          ./gitvalet version
-          ./gitvalet unknown || test $? = 2
-          ./gitvalet sync --dry-run
+        run: go tool task smoke
 
       - name: gitleaks
         continue-on-error: true

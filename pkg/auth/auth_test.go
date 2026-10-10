@@ -13,10 +13,10 @@ func TestGitConfigArgsRedactsInTests(t *testing.T) {
 }
 
 func TestInferSCM(t *testing.T) {
-	if InferSCM("https://gitlab.com/foo/bar") != "gitlab" {
+	if InferSCM("https://gitlab.com/foo/bar") != SCMGitLab {
 		t.Fatal("expected gitlab")
 	}
-	if InferSCM("https://github.com/foo/bar") != "github" {
+	if InferSCM("https://github.com/foo/bar") != SCMGitHub {
 		t.Fatal("expected github")
 	}
 }
