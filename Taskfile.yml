@@ -1,0 +1,60 @@
+version: "3"
+
+vars:
+  BIN: gitvalet{{exeExt}}
+
+env:
+  GOWORK: "off"
+
+tasks:
+  default:
+    desc: List local-dev tasks
+    cmds:
+      - go tool task --list
+
+  format:
+    desc: Format with gofumpt
+    cmds:
+      - go tool gofumpt -w ./cmd ./internal ./pkg
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - go tool golangci-lint run --timeout 5m ./cmd/... ./internal/... ./pkg/...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  test:
+    desc: Run unit tests with race
+    cmds:
+      - go test -race -count=1 ./...
+
+  tidy:
+    desc: go mod tidy
+    cmds:
+      - go mod tidy
+
+  build:
+    desc: Build gitvalet CLI
+    cmds:
+      - go build -o {{.BIN}} ./cmd/gitvalet
+
+  smoke:
+    desc: CLI agent guide help version usage
+    deps: [build]
+    cmds:
+      - ./{{.BIN}}
+      - ./{{.BIN}} help
+      - ./{{.BIN}} -h
+      - ./{{.BIN}} version
+      - ./{{.BIN}} nope || test $? = 2
+      - ./{{.BIN}} sync --dry-run
+
+  hooks-install:
+    desc: Install .githooks pre-commit
+    cmds:
+      - chmod +x .githooks/pre-commit
+      - git config core.hooksPath .githooks

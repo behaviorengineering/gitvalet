@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Format staged Go files before commit (matches CI gofmt gate).
+# Format staged Go files before commit (matches CI gofumpt gate).
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -15,16 +15,14 @@ if ((${#files[@]} == 0)); then
 	exit 0
 fi
 
+GOWORK=off go tool gofumpt -w "${files[@]}"
 for f in "${files[@]}"; do
-	if [[ -f "$f" ]]; then
-		gofmt -w "$f"
-		git add "$f"
-	fi
+	git add "$f"
 done
 
-unformatted="$(gofmt -l "${files[@]}")"
+unformatted="$(GOWORK=off go tool gofumpt -l "${files[@]}")"
 if [[ -n "$unformatted" ]]; then
-	echo "gofmt: still unformatted after write:" >&2
+	echo "gofumpt: still unformatted after write:" >&2
 	echo "$unformatted" >&2
 	exit 1
 fi

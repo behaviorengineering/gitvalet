@@ -70,7 +70,7 @@ func runAttempt(ctx context.Context, timeout time.Duration, name string, args ..
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, name, args...)
+	cmd := exec.CommandContext(runCtx, name, args...) //nolint:gosec // argv are caller-controlled CLI tools
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -23,6 +23,6 @@ MUST NOT copy skill bodies into the host unless links fail and the user approves
 
 ## Quality gates
 
-`make help`, `make hooks-install` (once per clone), `make tidy`, `make fmt`, `make vet`, `make test`, `make build`, `make smoke`.
+From module root: `go tool task --list`. Typical flow: `go tool task hooks-install` (once per clone), `go tool task tidy`, `go tool task format`, `go tool task lint`, `go tool task vet`, `go tool task test`, `go tool task build`, `go tool task smoke`.
 
-Pre-commit runs `gofmt` on staged `.go` files after `make hooks-install`.
+Pre-commit runs `gofumpt` on staged `.go` files after `go tool task hooks-install`.

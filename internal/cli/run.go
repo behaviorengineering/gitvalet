@@ -227,5 +227,6 @@ func withDefaultDeadline(ctx context.Context) (context.Context, context.CancelFu
 	if _, ok := ctx.Deadline(); ok {
 		return ctx, func() {}
 	}
-	return context.WithTimeout(ctx, 2*time.Minute)
+	child, cancel := context.WithTimeout(ctx, 2*time.Minute) //nolint:gosec // cancel is returned to the caller
+	return child, cancel
 }

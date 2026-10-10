@@ -6,13 +6,20 @@ import (
 	"strings"
 )
 
+// SCM name constants for Credential.SCM and InferSCM.
+const (
+	SCMGitHub    = "github"
+	SCMGitLab    = "gitlab"
+	SCMBitbucket = "bitbucket"
+)
+
 // Credential is a forge-scoped HTTPS token for Git smart HTTP.
 type Credential struct {
 	Token string
 	SCM   string // github, gitlab, bitbucket, or empty for GitHub-style default
 }
 
-// GitConfigArgs returns git -c http.extraHeader=... args. Empty token yields nil.
+// Build authenticated Git HTTPS header args for http.extraHeader. Empty token yields nil.
 func GitConfigArgs(cred Credential) []string {
 	token := strings.TrimSpace(cred.Token)
 	if token == "" {
@@ -21,10 +28,10 @@ func GitConfigArgs(cred Credential) []string {
 	scm := strings.ToLower(strings.TrimSpace(cred.SCM))
 	var header string
 	switch scm {
-	case "gitlab":
+	case SCMGitLab:
 		basic := base64.StdEncoding.EncodeToString([]byte("oauth2:" + token))
 		header = "Authorization: Basic " + basic
-	case "bitbucket":
+	case SCMBitbucket:
 		basic := base64.StdEncoding.EncodeToString([]byte("x-token-auth:" + token))
 		header = "Authorization: Basic " + basic
 	default:
@@ -38,12 +45,12 @@ func GitConfigArgs(cred Credential) []string {
 func InferSCM(remoteURL string) string {
 	u := strings.ToLower(remoteURL)
 	switch {
-	case strings.Contains(u, "gitlab"):
-		return "gitlab"
-	case strings.Contains(u, "bitbucket"):
-		return "bitbucket"
+	case strings.Contains(u, SCMGitLab):
+		return SCMGitLab
+	case strings.Contains(u, SCMBitbucket):
+		return SCMBitbucket
 	default:
-		return "github"
+		return SCMGitHub
 	}
 }
 

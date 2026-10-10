@@ -93,7 +93,7 @@ func (c *Client) cloneRunner() clone.Runner {
 		}
 		gitArgs := append([]string{}, auth.GitConfigArgs(c.Cred)...)
 		gitArgs = append(gitArgs, args...)
-		cmd := exec.CommandContext(ctx, "git", gitArgs...)
+		cmd := exec.CommandContext(ctx, "git", gitArgs...) //nolint:gosec // git argv come from clone runner
 		cmd.Dir = dir
 		if len(env) > 0 {
 			cmd.Env = append(os.Environ(), env...)
@@ -118,7 +118,7 @@ func (r runner) RunTrim(ctx context.Context, dir string, args ...string) (string
 		cmdArgs = append(cmdArgs, "-C", dir)
 	}
 	cmdArgs = append(cmdArgs, args...)
-	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...) //nolint:gosec // git argv are validated git subcommands
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))

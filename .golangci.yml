@@ -1,0 +1,34 @@
+version: "2"
+
+run:
+  go: "1.26.0"
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errorlint
+    - exhaustive
+    - goconst
+    - gocognit
+    - gosec
+    - godot
+  settings:
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    exhaustive:
+      default-signifies-exhaustive: false
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+      ignore-tests: true
+    gocognit:
+      min-complexity: 20
+    godot:
+      period: true
+      capital: true
+
+formatters:
+  enable:
+    - gofumpt

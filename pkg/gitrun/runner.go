@@ -3,6 +3,7 @@ package gitrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -26,7 +27,7 @@ func (r Runner) Run(ctx context.Context, dir string, args ...string) (string, er
 		cmdArgs = append(cmdArgs, "-C", dir)
 	}
 	cmdArgs = append(cmdArgs, args...)
-	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...) //nolint:gosec // git argv are validated git subcommands
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -60,7 +61,7 @@ func (r Runner) AllowFail(ctx context.Context, dir string, args ...string) (stri
 		cmdArgs = append(cmdArgs, "-C", dir)
 	}
 	cmdArgs = append(cmdArgs, args...)
-	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...) //nolint:gosec // git argv are validated git subcommands
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -68,7 +69,8 @@ func (r Runner) AllowFail(ctx context.Context, dir string, args ...string) (stri
 	if err == nil {
 		return strings.TrimSpace(stdout.String()), 0
 	}
-	if ee, ok := err.(*exec.ExitError); ok {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
 		return stdout.String(), ee.ExitCode()
 	}
 	return stdout.String(), 1
