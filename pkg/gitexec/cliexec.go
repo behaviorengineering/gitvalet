@@ -194,11 +194,3 @@ func isSignalKilled(err error) bool {
 	}
 	return strings.Contains(err.Error(), "signal: killed")
 }
-
-func redactArgs(args []string) string {
-	return strings.Join(args, " ")
-}
-
-func redactOutput(msg string) string {
-	return msg
-}

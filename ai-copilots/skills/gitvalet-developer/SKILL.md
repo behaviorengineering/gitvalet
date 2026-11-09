@@ -26,6 +26,10 @@ description: >-
 - Enforcement: `go test ./pkg/gitexec` runs the credential leak test against a span recorder
 - Violation: STOP, rebuild the recorded error from `command` fields, never from `err.Error()`
 
+**CONSTRAINT:** Errors that `pkg/gitexec` returns MUST pass argv through `redactArgs` and stderr or stdout through `redactOutput` (`pkg/gitexec/redact.go`). MUST NOT format raw `args` or process output into an error.
+- Enforcement: `go test ./pkg/gitexec -run 'Redact|RunAttemptError'` covers each masked shape and a real failing command
+- Violation: STOP, route the text through the redactors and add a table case for the new shape
+
 **CONSTRAINT:** The library MUST NOT install a tracer provider (no `olly.Init`, no `otel.SetTracerProvider` outside tests). Spans use `olly.Tracer(gitexec.TracerName)` on the host's global provider.
 - Enforcement: `rg 'olly.Init|SetTracerProvider' pkg/ --glob '!*_test.go'` finds nothing
 - Violation: STOP, move provider setup to the host entrypoint
