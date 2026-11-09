@@ -43,6 +43,12 @@ gitvalet never installs one, so spans are no-ops until the host does.
 Spans never carry the full argv, environment, stdin or output: arguments can
 hold credentials such as `Authorization` headers or `user:password` URLs.
 
+Errors returned from `Run` and `RunJSON` do name the command, its arguments and
+stderr, but with credentials masked as `***`: URL credentials, `Authorization`
+and token or password header values, values after `--token`, `--password`,
+`--user`, `-u` and `--pat`, and GitHub and GitLab token shapes. Treat the
+masking as a safety net, not a licence to pass secrets in argv.
+
 ## Releases (for agents)
 
 Default branch merges that change releasable code get patch tags via CI. Consumers pin `github.com/behaviorengineering/gitvalet@vX.Y.Z`.
