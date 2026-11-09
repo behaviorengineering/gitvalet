@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/failsafe-go/failsafe-go"
 )
 
 // Exec is the injectable CLI surface used by forge and local git callers.
@@ -17,16 +20,33 @@ type Exec interface {
 	RunJSON(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-// Runner executes external CLIs with a timeout and failsafe-go resilience.
+// DefaultTimeout bounds each process attempt when Runner.Timeout is unset.
+const DefaultTimeout = 45 * time.Second
+
+// Runner executes external CLIs with a timeout, an optional concurrency cap
+// and failsafe-go resilience. Each call starts an OpenTelemetry span on the
+// global tracer provider (see TracerName); the runner never installs one.
+//
+// Set the exported fields before the first Run. Copies of a runner built
+// with New, or of one that has already run, share its process slots, retry
+// policy and circuit breakers.
 type Runner struct {
-	Timeout    time.Duration
-	attempt    func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error)
-	resilience *runnerResilience
+	// Timeout bounds each process attempt. Zero or negative uses DefaultTimeout.
+	Timeout time.Duration
+	// MaxConcurrent caps how many processes this runner runs at once. Calls
+	// over the cap queue on the caller's ctx before the process starts.
+	// Zero or negative means unlimited.
+	MaxConcurrent int
+	attempt       func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error)
+	resilience    *runnerResilience
+	slots         *slotPool
 }
 
-// New returns a runner with a sensible default timeout.
+var _ Exec = (*Runner)(nil)
+
+// New returns a runner with DefaultTimeout and no concurrency cap.
 func New() *Runner {
-	return &Runner{Timeout: 45 * time.Second, resilience: newRunnerResilience()}
+	return &Runner{Timeout: DefaultTimeout, resilience: newRunnerResilience(), slots: &slotPool{}}
 }
 
 // LookPath reports whether name is on PATH.
@@ -48,22 +68,85 @@ func (r *Runner) RunJSON(ctx context.Context, name string, args ...string) ([]by
 }
 
 // Run executes a command and returns stdout bytes.
-// Requires ctx to have a deadline (fail closed).
-func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+// Requires ctx to have a deadline (fail closed). When MaxConcurrent is set,
+// each attempt waits for a process slot with ctx; a ctx that ends while
+// queued returns ctx.Err() wrapped, and the process never starts.
+func (r *Runner) Run(ctx context.Context, name string, args ...string) (out []byte, err error) {
 	if r == nil {
 		r = New()
 	}
+	if ctx == nil {
+		return nil, ErrMissingDeadline
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return nil, ErrMissingDeadline
+	}
 	timeout := r.Timeout
 	if timeout <= 0 {
-		timeout = 45 * time.Second
+		timeout = DefaultTimeout
 	}
 	attempt := r.attempt
 	if attempt == nil {
 		attempt = runAttempt
 	}
-	return r.runWithResilience(ctx, name, func() ([]byte, error) {
-		return attempt(ctx, timeout, name, args...)
+	limit := r.MaxConcurrent
+	rr, slots := r.internals()
+	cmd := describeCommand(name, args)
+
+	callCtx, span := startCall(ctx, cmd)
+	var attempts atomic.Int64
+	defer func() {
+		span.SetAttributes(attrAttempts.Int64(attempts.Load()))
+		finishSpan(callCtx, span, cmd, err)
+		span.End()
+	}()
+
+	out, err = rr.run(callCtx, name, func(ex failsafe.Execution[[]byte]) ([]byte, error) {
+		attempts.Store(int64(ex.Attempts()))
+		return runTracedAttempt(ex.Context(), tracedAttempt{
+			cmd:     cmd,
+			number:  ex.Attempts(),
+			limit:   limit,
+			slots:   slots,
+			timeout: timeout,
+			run:     attempt,
+			name:    name,
+			args:    args,
+		})
 	})
+	return out, err
+}
+
+// tracedAttempt is one process execution inside a logical Run call.
+type tracedAttempt struct {
+	cmd     command
+	number  int
+	limit   int
+	slots   *slotPool
+	timeout time.Duration
+	run     func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error)
+	name    string
+	args    []string
+}
+
+// runTracedAttempt waits for a process slot, then runs the process under a
+// client span that records the attempt number, queue wait and outcome.
+func runTracedAttempt(ctx context.Context, a tracedAttempt) (out []byte, err error) {
+	ctx, span := startAttempt(ctx, a.cmd, a.number, a.limit)
+	defer func() {
+		finishSpan(ctx, span, a.cmd, err)
+		span.End()
+	}()
+
+	queued := time.Now()
+	release, err := a.slots.acquire(ctx, a.name, a.limit)
+	recordQueueWait(span, time.Since(queued))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	out, err = a.run(ctx, a.timeout, a.name, a.args...)
+	return out, err
 }
 
 func runAttempt(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
