@@ -22,6 +22,18 @@ description: >-
 - Enforcement: `rg 'exec.Command.*git' pkg/` outside gitexec/gitrun
 - Violation: STOP, wrap in gitexec or gitrun
 
+**CONSTRAINT:** `pkg/gitexec` spans MUST NOT record argv values, environment, stdin, stdout or stderr. Span attributes and recorded errors carry only the executable name, the filtered subcommand words, the working directory, the attempt number, the queue wait, the exit code and the failure class.
+- Enforcement: `go test ./pkg/gitexec` runs the credential leak test against a span recorder
+- Violation: STOP, rebuild the recorded error from `command` fields, never from `err.Error()`
+
+**CONSTRAINT:** The library MUST NOT install a tracer provider (no `olly.Init`, no `otel.SetTracerProvider` outside tests). Spans use `olly.Tracer(gitexec.TracerName)` on the host's global provider.
+- Enforcement: `rg 'olly.Init|SetTracerProvider' pkg/ --glob '!*_test.go'` finds nothing
+- Violation: STOP, move provider setup to the host entrypoint
+
+**CONSTRAINT:** New `gitexec.Runner` options MUST default to the old behaviour at their zero value (`Timeout` 0 means `DefaultTimeout`, `MaxConcurrent` 0 means unlimited) and MUST be documented in the README runner options table.
+- Enforcement: Review the `Runner` struct and README table together
+- Violation: STOP, make the zero value safe and document the field
+
 **CONSTRAINT:** MUST keep tests offline with fakes; live forge tests MUST be opt-in via environment variables.
 - Enforcement: `go test ./...` passes without network; live tests gated by env
 - Violation: STOP, add fakes or env skip

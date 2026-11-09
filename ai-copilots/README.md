@@ -15,7 +15,7 @@ to execute [BOOTSTRAP.md](BOOTSTRAP.md).
 |---------|------|
 | `forgeclient` | Cross-forge API (`git-pkgs/forge`) |
 | `gitclone` | Pinned checkout (`git-pkgs/clone`) |
-| `gitexec` | Injectable CLI with deadlines and retries |
+| `gitexec` | Injectable CLI with deadlines, retries, `MaxConcurrent` cap and OpenTelemetry spans |
 | `gitrun` | Authenticated git subprocess helper |
 | `gitinspect` | Read-only repo inspection |
 | `gitfetch` | Fetch TTL cache |

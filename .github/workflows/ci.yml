@@ -12,7 +12,7 @@ jobs:
   quality:
     strategy:
       matrix:
-        go: ["1.26.0", "1.26.5"]
+        go: ["1.27.0"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

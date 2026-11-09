@@ -69,21 +69,34 @@ func (rr *runnerResilience) breakerFor(name string) circuitbreaker.CircuitBreake
 	return out
 }
 
-func (r *Runner) ensureResilience() *runnerResilience {
+// lazyInit guards the lazy creation of Runner internals for zero-value
+// runners shared across goroutines.
+var lazyInit sync.Mutex
+
+// internals returns the resilience policies and the process slot pool,
+// creating them on first use for runners not built with New.
+func (r *Runner) internals() (*runnerResilience, *slotPool) {
+	lazyInit.Lock()
+	defer lazyInit.Unlock()
 	if r.resilience == nil {
 		r.resilience = newRunnerResilience()
 	}
-	return r.resilience
+	if r.slots == nil {
+		r.slots = &slotPool{}
+	}
+	return r.resilience, r.slots
 }
 
-func (r *Runner) runWithResilience(ctx context.Context, name string, once func() ([]byte, error)) ([]byte, error) {
-	if _, ok := ctx.Deadline(); !ok {
-		return nil, ErrMissingDeadline
-	}
-	rr := r.ensureResilience()
+// run executes once under the breaker for name and the retry policy.
+// The caller has already checked that ctx carries a deadline.
+func (rr *runnerResilience) run(
+	ctx context.Context,
+	name string,
+	once func(exec failsafe.Execution[[]byte]) ([]byte, error),
+) ([]byte, error) {
 	return failsafe.With(rr.breakerFor(name), rr.retry).
 		WithContext(ctx).
-		Get(once)
+		GetWithExecution(once)
 }
 
 func isTransientCLIError(err error) bool {
