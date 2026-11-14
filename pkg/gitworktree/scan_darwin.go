@@ -94,26 +94,35 @@ func scanDir(dir string, list *unix.Attrlist, buf []byte, visit func(fileBlocks)
 		if n == 0 {
 			return subdirs, nil
 		}
-		off := 0
-		for range n {
-			entry, name, ok := readEntry(buf[off:])
-			if !ok {
-				return nil, errors.New("getattrlistbulk returned an entry too short to read")
-			}
-			off += int(binary.NativeEndian.Uint32(buf[off:]))
-			switch {
-			case entry.err:
-				continue
-			case entry.objType == vdir:
-				subdirs = append(subdirs, filepath.Join(dir, name))
-			case entry.objType == vreg:
-				if !entry.hasPrivate {
-					return nil, errNoPrivateSize
-				}
-				visit(entry.fileBlocks)
-			}
+		if subdirs, err = readBatch(dir, buf, int(n), subdirs, visit); err != nil {
+			return nil, err
 		}
 	}
+}
+
+// readBatch decodes the n entries getattrlistbulk(2) left in buf, calls visit for each regular file, and adds each
+// subfolder of dir to subdirs.
+func readBatch(dir string, buf []byte, n int, subdirs []string, visit func(fileBlocks)) ([]string, error) {
+	off := 0
+	for range n {
+		entry, name, ok := readEntry(buf[off:])
+		if !ok {
+			return nil, errors.New("getattrlistbulk returned an entry too short to read")
+		}
+		off += int(binary.NativeEndian.Uint32(buf[off:]))
+		switch {
+		case entry.err:
+			continue
+		case entry.objType == vdir:
+			subdirs = append(subdirs, filepath.Join(dir, name))
+		case entry.objType == vreg:
+			if !entry.hasPrivate {
+				return nil, errNoPrivateSize
+			}
+			visit(entry.fileBlocks)
+		}
+	}
+	return subdirs, nil
 }
 
 // bulkEntry is one decoded getattrlistbulk entry.

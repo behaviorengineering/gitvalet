@@ -119,31 +119,43 @@ func (s Seed) inputFiles(checkout string) ([]string, error) {
 	base := s.base(checkout)
 	var files []string
 	for _, g := range s.Inputs {
-		if under, ok := strings.CutSuffix(g, "/**"); ok {
-			err := filepath.WalkDir(filepath.Join(base, under), func(path string, d fs.DirEntry, err error) error {
-				if err != nil || d.IsDir() {
-					return err
-				}
-				files = append(files, path[len(base)+1:])
-				return nil
-			})
-			if err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return nil, fmt.Errorf("gitworktree: seed %s: list %s: %w", s.Name, g, err)
-			}
-			continue
-		}
-		matches, err := filepath.Glob(filepath.Join(base, g))
+		found, err := filesMatching(base, g)
 		if err != nil {
 			return nil, fmt.Errorf("gitworktree: seed %s: match %s: %w", s.Name, g, err)
 		}
-		for _, abs := range matches {
-			if info, err := os.Stat(abs); err == nil && info.Mode().IsRegular() {
-				files = append(files, abs[len(base)+1:])
-			}
-		}
+		files = append(files, found...)
 	}
 	slices.Sort(files)
 	return slices.Compact(files), nil
+}
+
+// filesMatching lists the regular files under base that glob matches, relative to base. A glob ending in "/**"
+// matches every file under that folder, and a folder that is not there matches nothing.
+func filesMatching(base, glob string) ([]string, error) {
+	var files []string
+	if under, ok := strings.CutSuffix(glob, "/**"); ok {
+		err := filepath.WalkDir(filepath.Join(base, under), func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			files = append(files, path[len(base)+1:])
+			return nil
+		})
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return files, err
+	}
+	matches, err := filepath.Glob(filepath.Join(base, glob))
+	if err != nil {
+		return nil, err
+	}
+	for _, abs := range matches {
+		if info, err := os.Stat(abs); err == nil && info.Mode().IsRegular() {
+			files = append(files, abs[len(base)+1:])
+		}
+	}
+	return files, nil
 }
 
 // matches reports whether the main checkout has the seed's folders and the worktree's inputs match its own, so the

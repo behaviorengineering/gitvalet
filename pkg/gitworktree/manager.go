@@ -109,18 +109,18 @@ func (cfg Config) CreateManager() (*Manager, error) {
 	}
 	// git lists worktrees by their real paths, so the checkout's path is made real too, or /var and /private/var
 	// would name one folder twice.
-	real, err := filepath.EvalSymlinks(cfg.Repo)
+	resolved, err := filepath.EvalSymlinks(cfg.Repo)
 	if err != nil {
 		return nil, fmt.Errorf("gitworktree: find the main checkout %s: %w", cfg.Repo, err)
 	}
-	cfg.Repo = real
+	cfg.Repo = resolved
 	if cfg.Programs == nil {
 		cfg.Programs = SystemPrograms{}
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Manager{cfg: cfg, root: filepath.Join(real, cfg.Root), tracer: olly.Tracer(TracerName)}, nil
+	return &Manager{cfg: cfg, root: filepath.Join(resolved, cfg.Root), tracer: olly.Tracer(TracerName)}, nil
 }
 
 // Worktree is one worktree under the root.
@@ -148,6 +148,7 @@ type Outcome struct {
 // Steps a method can take.
 const (
 	gitWorktree      = "worktree"
+	gitQuiet         = "--quiet"
 	stepFetch        = "fetch "
 	stepCreate       = "create the worktree"
 	stepRemove       = "remove the worktree; its branch stays"
@@ -239,7 +240,7 @@ func (m *Manager) Add(ctx context.Context, opts AddOptions) (out Outcome, err er
 	if exists(path) {
 		return out, fmt.Errorf("%w: %s", ErrExists, path)
 	}
-	_, code := m.cfg.Git.AllowFail(ctx, m.cfg.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+opts.Branch)
+	_, code := m.cfg.Git.AllowFail(ctx, m.cfg.Repo, "rev-parse", "--verify", gitQuiet, "refs/heads/"+opts.Branch)
 	branchExists := code == 0
 
 	from := firstOf(opts.From, m.cfg.BaseRef, "HEAD")
@@ -279,9 +280,9 @@ func (m *Manager) Add(ctx context.Context, opts AddOptions) (out Outcome, err er
 // create runs git worktree add at path, on branch when it exists and on a new branch from from when it does not, and
 // returns the new worktree's HEAD.
 func (m *Manager) create(ctx context.Context, path, branch, from string, branchExists bool) (string, error) {
-	args := []string{gitWorktree, "add", "--quiet", path, branch}
+	args := []string{gitWorktree, "add", gitQuiet, path, branch}
 	if !branchExists {
-		args = []string{gitWorktree, "add", "--quiet", "-b", branch, path, from}
+		args = []string{gitWorktree, "add", gitQuiet, "-b", branch, path, from}
 	}
 	if _, err := m.cfg.Git.Run(ctx, m.cfg.Repo, args...); err != nil {
 		return "", fmt.Errorf("gitworktree: create the worktree: %w", err)
@@ -314,7 +315,7 @@ func (m *Manager) fetchBase(ctx context.Context) error {
 	if _, ok := ctx.Deadline(); !ok {
 		return ErrMissingDeadline
 	}
-	if _, err := m.cfg.Git.Run(ctx, m.cfg.Repo, "fetch", "--quiet", "origin", m.cfg.BaseFetch); err != nil {
+	if _, err := m.cfg.Git.Run(ctx, m.cfg.Repo, "fetch", gitQuiet, "origin", m.cfg.BaseFetch); err != nil {
 		return fmt.Errorf("gitworktree: fetch %s: %w", m.cfg.BaseFetch, err)
 	}
 	return nil

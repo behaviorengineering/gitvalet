@@ -95,8 +95,8 @@ type programs []Program
 // working folder is inside it.
 func (ps programs) using(dir string) []Program {
 	dirs := []string{dir}
-	if real, err := filepath.EvalSymlinks(dir); err == nil && real != dir {
-		dirs = append(dirs, real)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil && resolved != dir {
+		dirs = append(dirs, resolved)
 	}
 	self := os.Getpid()
 	var found []Program
