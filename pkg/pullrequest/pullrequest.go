@@ -123,11 +123,18 @@ func newestFrom(prs []forge.PullRequest, branch string) (PR, bool) {
 	if newest == nil {
 		return PR{}, false
 	}
+	// GitHub's list of pull requests carries merged_at but not merged, so git-pkgs/forge reports a merged pull request
+	// from a list as closed and not merged; merged_at is the one field every forge sets.
+	merged := newest.Merged || newest.State == forge.PRStatusMerged || newest.MergedAt != nil
+	state := newest.State
+	if merged {
+		state = forge.PRStatusMerged
+	}
 	return PR{
 		Number:  newest.Number,
 		URL:     newest.HTMLURL,
-		State:   string(newest.State),
-		Merged:  newest.Merged || newest.State == forge.PRStatusMerged,
+		State:   string(state),
+		Merged:  merged,
 		HeadSHA: newest.Head.SHA,
 	}, true
 }

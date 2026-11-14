@@ -32,6 +32,22 @@ func TestNewestFromPicksTheHighestNumberOnTheBranch(t *testing.T) {
 	}
 }
 
+func TestNewestFromCountsMergedAtAsMerged(t *testing.T) {
+	// GitHub's list call gives a merged pull request state "closed", no merged flag, and a merged_at time.
+	at := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
+	prs := []forge.PullRequest{
+		{Number: 140, State: forge.PRStatusClosed, MergedAt: &at, Head: forge.PRBranch{Ref: "feat/a", SHA: "head"}},
+	}
+	pr, found := newestFrom(prs, "feat/a")
+	if !found || !pr.Merged || pr.State != "merged" || pr.Open() {
+		t.Fatalf("pr = %+v, want #140 merged", pr)
+	}
+	closed, _ := newestFrom([]forge.PullRequest{{Number: 141, State: forge.PRStatusClosed, Head: forge.PRBranch{Ref: "feat/a"}}}, "feat/a")
+	if closed.Merged || closed.State != "closed" {
+		t.Fatalf("pr = %+v, want #141 closed without merging", closed)
+	}
+}
+
 func TestNewestFromFindsNothingForAnotherBranch(t *testing.T) {
 	if _, found := newestFrom([]forge.PullRequest{{Number: 1, Head: forge.PRBranch{Ref: "feat/b"}}}, "feat/a"); found {
 		t.Fatal("want nothing")
