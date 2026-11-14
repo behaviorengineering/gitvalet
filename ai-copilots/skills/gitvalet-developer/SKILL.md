@@ -1,7 +1,7 @@
 ---
 name: gitvalet-developer
 description: >-
-  Extend gitvalet packages and CLI: forgeclient, gitclone, gitexec, gitrun.
+  Extend gitvalet packages and CLI: forgeclient, pullrequest, gitclone, gitexec, gitrun, gitworktree.
   Use when adding packages, changing subprocess or forge wiring, or writing
   offline tests for gitvalet.
 ---
@@ -10,9 +10,9 @@ description: >-
 
 ## Constraints
 
-**CONSTRAINT:** MUST keep forge API wiring in `pkg/forgeclient` (upstream `git-pkgs/forge`).
-- Enforcement: `rg 'git-pkgs/forge' pkg/forgeclient`
-- Violation: STOP, move forge calls into forgeclient
+**CONSTRAINT:** MUST keep forge API wiring in `pkg/forgeclient` (upstream `git-pkgs/forge`), and pull request work in `pkg/pullrequest`, gitvalet's one place for it. Other packages that need a pull request MUST take a small interface that `pullrequest` satisfies, as `gitworktree.PRFinder` does.
+- Enforcement: `rg -l '"github.com/git-pkgs/forge"' pkg --glob '!*_test.go'` (the import) lists only files under `pkg/forgeclient` and `pkg/pullrequest`
+- Violation: STOP, move forge calls into forgeclient, or pull request calls into pullrequest
 
 **CONSTRAINT:** MUST keep checkout mechanics in `pkg/gitclone` (upstream `git-pkgs/clone`).
 - Enforcement: Clone options and EnsureCheckout live in gitclone
@@ -37,6 +37,10 @@ description: >-
 **CONSTRAINT:** New `gitexec.Runner` options MUST default to the old behaviour at their zero value (`Timeout` 0 means `DefaultTimeout`, `MaxConcurrent` 0 means unlimited) and MUST be documented in the README runner options table.
 - Enforcement: Review the `Runner` struct and README table together
 - Violation: STOP, make the zero value safe and document the field
+
+**CONSTRAINT:** `pkg/gitworktree` MUST NOT delete a worktree a program is using or one with uncommitted or untracked files, and every method that changes a worktree MUST honour `DryRun`. Clone-dependent code MUST return `ErrUnsupported` off APFS, never fail the build, and tests that clone MUST call `needsClones(t)`.
+- Enforcement: `go test ./pkg/gitworktree` covers the busy, dirty and dry-run cases; `GOOS=linux go vet ./pkg/gitworktree` builds the fallback
+- Violation: STOP, restore the guard and add a test case for the path that lost it
 
 **CONSTRAINT:** MUST keep tests offline with fakes; live forge tests MUST be opt-in via environment variables.
 - Enforcement: `go test ./...` passes without network; live tests gated by env
