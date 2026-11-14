@@ -304,10 +304,8 @@ func (m *Manager) seed(ctx context.Context, s Seed, run seedRun) ([]string, stri
 		}
 	}
 	if prepare {
-		if !run.dryRun {
-			if err := m.prepare(ctx, s, run.worktree); err != nil {
-				return steps, found.note, err
-			}
+		if err := m.prepare(ctx, s, run); err != nil {
+			return steps, found.note, err
 		}
 		steps = append(steps, s.stepPrepare())
 	}
@@ -331,13 +329,16 @@ func (m *Manager) cloneSeed(ctx context.Context, s Seed, src []string, run seedR
 	return err == nil, "", err
 }
 
-// prepare runs the seed's Prepare step in the worktree, then stamps the folders it made.
-func (m *Manager) prepare(ctx context.Context, s Seed, worktree string) error {
-	m.cfg.Logger.Info("preparing", "seed", s.Name, "worktree", worktree)
-	if err := s.Prepare(ctx, worktree); err != nil {
-		return fmt.Errorf("gitworktree: seed %s: prepare %s: %w", s.Name, worktree, err)
+// prepare runs the seed's Prepare step in the worktree, then stamps the folders it made. A dry run does nothing.
+func (m *Manager) prepare(ctx context.Context, s Seed, run seedRun) error {
+	if run.dryRun {
+		return nil
 	}
-	return s.writeStamp(worktree, m.root)
+	m.cfg.Logger.Info("preparing", "seed", s.Name, "worktree", run.worktree)
+	if err := s.Prepare(ctx, run.worktree); err != nil {
+		return fmt.Errorf("gitworktree: seed %s: prepare %s: %w", s.Name, run.worktree, err)
+	}
+	return s.writeStamp(run.worktree, m.root)
 }
 
 // cloneAll replaces each of the seed's folders in the worktree with a clone of the main checkout's.

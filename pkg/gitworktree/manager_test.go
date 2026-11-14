@@ -628,12 +628,12 @@ func TestShareDryRunMatchesTheRealRunWhereFoldersCannotBeCloned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	real, err := f.mgr.Share(ctx(t), ShareOptions{})
+	done, err := f.mgr.Share(ctx(t), ShareOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan[0].Done != real[0].Done || !slices.Equal(plan[0].Steps, real[0].Steps) || plan[0].Reason != real[0].Reason {
-		t.Fatalf("dry run %+v, real run %+v; want the same outcome", plan[0], real[0])
+	if plan[0].Done != done[0].Done || !slices.Equal(plan[0].Steps, done[0].Steps) || plan[0].Reason != done[0].Reason {
+		t.Fatalf("dry run %+v, real run %+v; want the same outcome", plan[0], done[0])
 	}
 }
 
