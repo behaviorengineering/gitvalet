@@ -6,3 +6,6 @@ package gitworktree
 func cloneTree(_, _ string) error {
 	return ErrUnsupported
 }
+
+// canCloneInto is false: cloneTree cannot clone here.
+func canCloneInto(_, _ string) bool { return false }

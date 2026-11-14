@@ -1,7 +1,7 @@
 ---
 name: gitvalet-developer
 description: >-
-  Extend gitvalet packages and CLI: forgeclient, gitclone, gitexec, gitrun, gitworktree.
+  Extend gitvalet packages and CLI: forgeclient, pullrequest, gitclone, gitexec, gitrun, gitworktree.
   Use when adding packages, changing subprocess or forge wiring, or writing
   offline tests for gitvalet.
 ---
@@ -10,9 +10,9 @@ description: >-
 
 ## Constraints
 
-**CONSTRAINT:** MUST keep forge API wiring in `pkg/forgeclient` (upstream `git-pkgs/forge`).
-- Enforcement: `rg 'git-pkgs/forge' pkg/forgeclient`
-- Violation: STOP, move forge calls into forgeclient
+**CONSTRAINT:** MUST keep forge API wiring in `pkg/forgeclient` (upstream `git-pkgs/forge`), and pull request work in `pkg/pullrequest`, gitvalet's one place for it. Other packages that need a pull request MUST take a small interface that `pullrequest` satisfies, as `gitworktree.PRFinder` does.
+- Enforcement: `rg -l '"github.com/git-pkgs/forge"' pkg --glob '!*_test.go'` (the import) lists only files under `pkg/forgeclient` and `pkg/pullrequest`
+- Violation: STOP, move forge calls into forgeclient, or pull request calls into pullrequest
 
 **CONSTRAINT:** MUST keep checkout mechanics in `pkg/gitclone` (upstream `git-pkgs/clone`).
 - Enforcement: Clone options and EnsureCheckout live in gitclone

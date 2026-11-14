@@ -18,3 +18,12 @@ func cloneTree(src, dst string) error {
 	}
 	return err
 }
+
+// canCloneInto reports whether cloneTree could clone src into the folder dst: both on one APFS volume.
+func canCloneInto(src, dst string) bool {
+	var a, b unix.Statfs_t
+	if unix.Statfs(src, &a) != nil || unix.Statfs(dst, &b) != nil {
+		return false
+	}
+	return a.Fsid == b.Fsid && unix.ByteSliceToString(a.Fstypename[:]) == "apfs"
+}

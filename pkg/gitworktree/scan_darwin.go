@@ -94,15 +94,18 @@ func scanDir(dir string, list *unix.Attrlist, buf []byte, visit func(fileBlocks)
 		if n == 0 {
 			return subdirs, nil
 		}
-		if subdirs, err = readBatch(dir, buf, int(n), subdirs, visit); err != nil {
+		found, err := readBatch(dir, buf, int(n), visit)
+		if err != nil {
 			return nil, err
 		}
+		subdirs = append(subdirs, found...)
 	}
 }
 
-// readBatch decodes the n entries getattrlistbulk(2) left in buf, calls visit for each regular file, and adds each
-// subfolder of dir to subdirs.
-func readBatch(dir string, buf []byte, n int, subdirs []string, visit func(fileBlocks)) ([]string, error) {
+// readBatch decodes the n entries getattrlistbulk(2) left in buf, calls visit for each regular file, and returns the
+// subfolders of dir among them.
+func readBatch(dir string, buf []byte, n int, visit func(fileBlocks)) ([]string, error) {
+	var subdirs []string
 	off := 0
 	for range n {
 		entry, name, ok := readEntry(buf[off:])

@@ -2,7 +2,8 @@
 
 A git and forge attendant for Go applications: shared forge API and Git checkout client library for majordomo, gitboard, and other hosts.
 
-- `pkg/forgeclient`: cross-forge API adapter around `git-pkgs/forge`, including the newest pull request a branch opened
+- `pkg/forgeclient`: cross-forge API adapter around `git-pkgs/forge`
+- `pkg/pullrequest`: pull requests (merge requests on GitLab) on any forge, with retries; today it finds the newest pull request a branch opened
 - `pkg/gitclone`: pinned checkout adapter around `git-pkgs/clone`
 - `pkg/gitworktree`: worktrees for agents, which get copy-on-write clones of the main checkout's installed packages instead of a fresh install
 - `pkg/gitexec`: deadline-gated CLI execution with retries, a concurrency cap and OpenTelemetry spans
@@ -74,21 +75,30 @@ cfg := gitworktree.Config{
 		PrepareOverClone: true,  // clone first, so the install only rewrites what changed
 	}},
 	Git: gitrun.Runner{Cred: cred},
-	PRs: forgeclient.NewBranchPRs(forgeClient, repoRef), // nil turns Prune off
+	PRs: pullrequest.NewFinder(forgeClient, repoRef), // nil turns Prune off
 }
 mgr, err := cfg.CreateManager()
 ```
+
+After installing in the main checkout, call `mgr.Stamp(ctx, "packages")`. It writes `.gitworktree-stamp` inside the
+seed's first folder, which is git-ignored like the folder, recording the inputs the install came from. New worktrees
+compare against that stamp, so a lockfile that changed without a reinstall gets `Prepare` instead of a stale clone.
+Without a stamp, the package trusts the main checkout's current inputs and says so in the outcome's reason.
 
 | Method | What it does |
 |--------|--------------|
 | `Add` | Makes the worktree on a branch, creating the branch from `BaseRef` (fetched with `BaseFetch`) when it is new, then clones each seed whose inputs match and runs `Prepare` for each that differs. |
 | `Share` | Swaps an existing worktree's own seed folders for clones, seed by seed, where the inputs match. |
 | `Remove` | Runs `git worktree remove` and keeps the branch. It returns `ErrKept` while a program uses the worktree or it has uncommitted or untracked files. |
-| `Prune` | Removes each worktree whose branch's newest pull request merged or closed, and deletes the local branch when it merged at exactly the local head. |
+| `Prune` | Removes each worktree whose branch's newest pull request merged or closed, and deletes the local branch when it merged at exactly the local head. Pull requests from forks that reuse the branch name do not count. |
 | `Usage` | Reports, per checkout, what `du` would count, what the checkout alone holds, and what it shares with clones elsewhere. |
 
-Every method that changes a worktree takes `DryRun`. A program counts as using a worktree when its command line
-names a path inside it, or its working folder is inside it (from `ps` and `lsof`, or a `ProgramLister` you pass).
+Every method that changes a worktree takes `DryRun`, and a dry run decides through the same code as the real one.
+A program counts as using a worktree when its command line names a path inside it, or its working folder is inside
+it. `SystemPrograms` reads both with gopsutil, plus `/bin/ps` for command lines on macOS, because it can read
+root's programs; pass your own `ProgramLister` to change that. The fetch before a new branch runs through
+`gitexec`, so it gets retries and spans; for GitHub Enterprise on its own domain, set `HeadOwner` on the
+`pullrequest.Finder`.
 
 Clones and `Usage` need APFS on macOS. Elsewhere, `Add` runs each seed's `Prepare` instead of cloning, `Share`
 leaves the worktree as it is, and `Usage` returns `ErrUnsupported`. `Usage` reads each folder with

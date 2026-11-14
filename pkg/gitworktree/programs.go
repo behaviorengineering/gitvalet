@@ -1,22 +1,21 @@
 package gitworktree
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
+
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 // Program is a running program the busy check looks at.
 type Program struct {
 	PID     int    `json:"pid"`
 	Command string `json:"command"`
-	// Dir is the program's working folder, when the system reported it.
+	// Dir is the program's working folder, when the system let this process read it.
 	Dir string `json:"dir,omitempty"`
 }
 
@@ -25,67 +24,44 @@ type ProgramLister interface {
 	Programs(ctx context.Context) ([]Program, error)
 }
 
-// SystemPrograms lists the running programs with ps and lsof, on macOS and Linux.
+// SystemPrograms lists the running programs on macOS and Linux with no outside tool, except /bin/ps on macOS.
 type SystemPrograms struct{}
 
-// Programs reads every program's command line with ps and its working folder with lsof. When lsof cannot read some
-// programs, such as other users', it exits 1 and still prints the rest, so its output is kept.
+// Programs lists every running program with its command line and working folder. It reads working folders with
+// gopsutil (libproc on macOS, /proc on Linux), which sees only this user's programs, as lsof does without root.
+// Command lines come from commandLines, which on macOS also sees root's and other users' programs.
 func (SystemPrograms) Programs(ctx context.Context) ([]Program, error) {
 	if ctx == nil {
 		return nil, errors.New("gitworktree: nil context")
 	}
-	ps, err := systemTool("ps", "/bin/ps", "/usr/bin/ps")
+	procs, err := process.ProcessesWithContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("gitworktree: list processes: %w", err)
+	}
+	commands, err := commandLines(ctx, procs)
 	if err != nil {
 		return nil, err
 	}
-	lsofPath, err := systemTool("lsof", "/usr/sbin/lsof", "/usr/bin/lsof", "/sbin/lsof")
-	if err != nil {
-		return nil, err
+	list := make([]Program, 0, len(commands))
+	for pid, command := range commands {
+		list = append(list, Program{PID: pid, Command: command})
 	}
-	out, err := exec.CommandContext(ctx, ps, "-A", "-ww", "-o", "pid=,command=").Output() // #nosec G204 -- a fixed system path and fixed arguments.
-	if err != nil {
-		return nil, fmt.Errorf("ps: %w", err)
-	}
-	byPID := map[int]*Program{}
-	var list []Program
-	for line := range strings.SplitSeq(string(out), "\n") {
-		pidText, command, ok := strings.Cut(strings.TrimSpace(line), " ")
-		if pid, perr := strconv.Atoi(pidText); ok && perr == nil {
-			list = append(list, Program{PID: pid, Command: strings.TrimSpace(command)})
+	dirs := make(map[int]string, len(procs))
+	for _, p := range procs {
+		// Another user's working folder is unreadable without root, so the error only means "not visible".
+		if dir, err := p.CwdWithContext(ctx); err == nil {
+			dirs[int(p.Pid)] = dir
 		}
 	}
 	for i := range list {
-		byPID[list[i].PID] = &list[i]
+		list[i].Dir = dirs[list[i].PID]
+		delete(dirs, list[i].PID)
 	}
-	var stdout bytes.Buffer
-	lsof := exec.CommandContext(ctx, lsofPath, "-n", "-P", "-w", "-d", "cwd", "-F", "pn") // #nosec G204 -- a fixed system path and fixed arguments.
-	lsof.Stdout = &stdout
-	if err := lsof.Run(); err != nil && stdout.Len() == 0 {
-		return nil, fmt.Errorf("lsof: %w", err)
-	}
-	pid := 0
-	for line := range strings.SplitSeq(stdout.String(), "\n") {
-		switch {
-		case strings.HasPrefix(line, "p"):
-			pid, _ = strconv.Atoi(line[1:])
-		case strings.HasPrefix(line, "n") && pid != 0:
-			if p := byPID[pid]; p != nil {
-				p.Dir = line[1:]
-			}
-		}
+	// A program whose command line was unreadable still counts by its working folder.
+	for pid, dir := range dirs {
+		list = append(list, Program{PID: pid, Dir: dir})
 	}
 	return list, nil
-}
-
-// systemTool returns the first of paths that exists. The busy check runs ps and lsof from the system's own folders,
-// never through PATH, because a program named ps earlier in PATH could hide a busy worktree from Remove.
-func systemTool(name string, paths ...string) (string, error) {
-	for _, p := range paths {
-		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("%s is not in %s; pass a ProgramLister instead", name, strings.Join(paths, ", "))
 }
 
 // programs is every running program, read once per method.

@@ -70,7 +70,8 @@ func (m *Manager) Usage(ctx context.Context, opts UsageOptions) (usages []Usage,
 		return nil, err
 	}
 	if len(opts.Names) == 0 {
-		branch, err := m.cfg.Git.RunTrim(ctx, m.cfg.Repo, "branch", "--show-current")
+		var branch string
+		branch, err = m.cfg.Git.RunTrim(ctx, m.cfg.Repo, "branch", "--show-current")
 		if err != nil {
 			return nil, fmt.Errorf("gitworktree: read the main checkout's branch: %w", err)
 		}
@@ -86,7 +87,7 @@ func (m *Manager) Usage(ctx context.Context, opts UsageOptions) (usages []Usage,
 			return err
 		})
 	}
-	if err := g.Wait(); err != nil {
+	if err = g.Wait(); err != nil {
 		return nil, err
 	}
 	return usages, nil
@@ -97,7 +98,7 @@ func (m *Manager) usageOf(ctx context.Context, w Worktree) (Usage, error) {
 	u := Usage{Worktree: w}
 	var dirs []string
 	for _, s := range m.cfg.Seeds {
-		rels, err := s.dirs(w.Path)
+		rels, err := s.dirs(w.Path, m.root)
 		if err != nil {
 			return u, err
 		}

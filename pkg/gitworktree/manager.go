@@ -25,8 +25,10 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/behaviorengineering/gitvalet/pkg/forgeclient"
+	"github.com/behaviorengineering/gitvalet/pkg/auth"
+	"github.com/behaviorengineering/gitvalet/pkg/gitexec"
 	"github.com/behaviorengineering/gitvalet/pkg/gitrun"
+	"github.com/behaviorengineering/gitvalet/pkg/pullrequest"
 )
 
 // TracerName is the instrumentation scope of the spans this package starts.
@@ -40,21 +42,22 @@ var (
 	ErrExists = errors.New("gitworktree: the folder already exists")
 	// ErrKept is returned when Remove refuses, because a program uses the worktree or it has changes git would lose.
 	ErrKept = errors.New("gitworktree: kept the worktree")
-	// ErrUnsupported is returned where the file system cannot clone folders or report shared blocks.
-	ErrUnsupported = errors.New("gitworktree: needs APFS clones, which this system does not have")
+	// ErrUnsupported is returned where folders cannot be cloned or their shared blocks cannot be read: a file system
+	// without APFS clones, or a main checkout and worktree on different volumes.
+	ErrUnsupported = errors.New("gitworktree: cannot clone folders here")
 	// ErrNoPRFinder is returned by Prune when the Config has no PRFinder.
 	ErrNoPRFinder = errors.New("gitworktree: pruning needs a PRFinder")
 	// ErrMissingDeadline is returned when a step that reaches the network gets a context with no deadline.
 	ErrMissingDeadline = errors.New("gitworktree: missing deadline")
 )
 
-// PRFinder finds the newest pull request a branch opened. A forgeclient.BranchPRs answers it for any forge that
+// PRFinder finds the newest pull request a branch opened. A pullrequest.Finder answers it for any forge that
 // git-pkgs/forge supports.
 type PRFinder interface {
-	NewestPR(ctx context.Context, branch string) (forgeclient.BranchPR, bool, error)
+	NewestPR(ctx context.Context, branch string) (pullrequest.PR, bool, error)
 }
 
-var _ PRFinder = (*forgeclient.BranchPRs)(nil)
+var _ PRFinder = (*pullrequest.Finder)(nil)
 
 // Config holds what a Manager needs.
 type Config struct {
@@ -71,8 +74,10 @@ type Config struct {
 	BaseFetch string
 	// Seeds are the groups of ignored folders a worktree gets from the main checkout, in order.
 	Seeds []Seed
-	// Git runs git.
+	// Git runs local git commands, with its Cred for the fetch too.
 	Git gitrun.Runner
+	// Exec runs the fetch from origin, with retries, a circuit breaker and spans. Nil uses gitexec.New().
+	Exec *gitexec.Runner
 	// Programs lists the running programs for the busy check. Nil uses SystemPrograms.
 	Programs ProgramLister
 	// PRs finds a branch's pull request for Prune. Nil turns Prune off.
@@ -86,6 +91,9 @@ type Manager struct {
 	cfg    Config
 	root   string
 	tracer trace.Tracer
+	// clone and canClone are cloneTree and canCloneInto, swapped in tests to act as a system that cannot clone.
+	clone    func(src, dst string) error
+	canClone func(src, dst string) bool
 }
 
 // validName is a folder name with no path in it.
@@ -120,7 +128,16 @@ func (cfg Config) CreateManager() (*Manager, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Manager{cfg: cfg, root: filepath.Join(resolved, cfg.Root), tracer: olly.Tracer(TracerName)}, nil
+	if cfg.Exec == nil {
+		cfg.Exec = gitexec.New()
+	}
+	return &Manager{
+		cfg:      cfg,
+		root:     filepath.Join(resolved, cfg.Root),
+		tracer:   olly.Tracer(TracerName),
+		clone:    cloneTree,
+		canClone: canCloneInto,
+	}, nil
 }
 
 // Worktree is one worktree under the root.
@@ -145,10 +162,14 @@ type Outcome struct {
 	Users []Program `json:"users,omitempty"`
 }
 
-// Steps a method can take.
+// Git words used more than once.
 const (
-	gitWorktree      = "worktree"
-	gitQuiet         = "--quiet"
+	gitWorktree = "worktree"
+	gitQuiet    = "--quiet"
+)
+
+// Steps and reasons an Outcome reports.
+const (
 	stepFetch        = "fetch "
 	stepCreate       = "create the worktree"
 	stepRemove       = "remove the worktree; its branch stays"
@@ -198,9 +219,16 @@ func (m *Manager) Find(ctx context.Context, name string) (Worktree, error) {
 	if err != nil {
 		return Worktree{}, err
 	}
-	abs, _ := filepath.Abs(name)
+	if strings.TrimSpace(name) == "" {
+		return Worktree{}, fmt.Errorf("%w: a name is required", ErrNotFound)
+	}
+	abs, err := filepath.Abs(name)
+	if err != nil {
+		return Worktree{}, fmt.Errorf("gitworktree: resolve %q: %w", name, err)
+	}
 	for _, w := range all {
-		if w.Name == name || w.Name == m.cfg.Prefix+name || w.Branch == name || w.Path == abs {
+		// A worktree on a detached HEAD has no branch, so its empty Branch must never match.
+		if w.Name == name || w.Name == m.cfg.Prefix+name || (w.Branch != "" && w.Branch == name) || w.Path == abs {
 			return w, nil
 		}
 	}
@@ -247,7 +275,7 @@ func (m *Manager) Add(ctx context.Context, opts AddOptions) (out Outcome, err er
 	if !branchExists && opts.From == "" && m.cfg.BaseFetch != "" {
 		out.Steps = append(out.Steps, stepFetch+m.cfg.BaseFetch)
 		if !opts.DryRun {
-			if err := m.fetchBase(ctx); err != nil {
+			if err = m.fetchBase(ctx); err != nil {
 				return out, err
 			}
 		}
@@ -263,11 +291,13 @@ func (m *Manager) Add(ctx context.Context, opts AddOptions) (out Outcome, err er
 		}
 		return out, nil
 	}
-	if out.Head, err = m.create(ctx, path, opts.Branch, from, branchExists); err != nil {
+	if out.Head, err = m.create(ctx, path, worktreeAddArgs(path, opts.Branch, from, branchExists)); err != nil {
 		return out, err
 	}
 	for _, s := range m.cfg.Seeds {
-		steps, reason, err := m.seed(ctx, s, path, true)
+		var steps []string
+		var reason string
+		steps, reason, err = m.seed(ctx, s, seedRun{worktree: path, add: true})
 		out.Steps = append(out.Steps, steps...)
 		out.Reason = joinReason(out.Reason, reason)
 		if err != nil {
@@ -277,13 +307,17 @@ func (m *Manager) Add(ctx context.Context, opts AddOptions) (out Outcome, err er
 	return out, nil
 }
 
-// create runs git worktree add at path, on branch when it exists and on a new branch from from when it does not, and
-// returns the new worktree's HEAD.
-func (m *Manager) create(ctx context.Context, path, branch, from string, branchExists bool) (string, error) {
-	args := []string{gitWorktree, "add", gitQuiet, path, branch}
-	if !branchExists {
-		args = []string{gitWorktree, "add", gitQuiet, "-b", branch, path, from}
+// worktreeAddArgs is the git worktree add that makes path on branch when it exists, and on a new branch from from
+// when it does not.
+func worktreeAddArgs(path, branch, from string, branchExists bool) []string {
+	if branchExists {
+		return []string{gitWorktree, "add", gitQuiet, path, branch}
 	}
+	return []string{gitWorktree, "add", gitQuiet, "-b", branch, path, from}
+}
+
+// create runs git with args, a git worktree add that makes the worktree at path, and returns its HEAD.
+func (m *Manager) create(ctx context.Context, path string, args []string) (string, error) {
 	if _, err := m.cfg.Git.Run(ctx, m.cfg.Repo, args...); err != nil {
 		return "", fmt.Errorf("gitworktree: create the worktree: %w", err)
 	}
@@ -310,12 +344,14 @@ func (m *Manager) folderName(opts AddOptions) (string, error) {
 	return name, nil
 }
 
-// fetchBase fetches Config.BaseFetch from origin. It reaches the network, so ctx MUST carry a deadline.
+// fetchBase fetches Config.BaseFetch from origin through Config.Exec, which retries transient failures. It reaches
+// the network, so ctx MUST carry a deadline.
 func (m *Manager) fetchBase(ctx context.Context) error {
 	if _, ok := ctx.Deadline(); !ok {
 		return ErrMissingDeadline
 	}
-	if _, err := m.cfg.Git.Run(ctx, m.cfg.Repo, "fetch", gitQuiet, "origin", m.cfg.BaseFetch); err != nil {
+	args := append(auth.GitConfigArgs(m.cfg.Git.Cred), "-C", m.cfg.Repo, "fetch", gitQuiet, "origin", m.cfg.BaseFetch)
+	if _, err := m.cfg.Exec.Run(ctx, "git", args...); err != nil {
 		return fmt.Errorf("gitworktree: fetch %s: %w", m.cfg.BaseFetch, err)
 	}
 	return nil
@@ -356,11 +392,7 @@ func (m *Manager) Share(ctx context.Context, opts ShareOptions) (outs []Outcome,
 		for _, s := range m.cfg.Seeds {
 			var steps []string
 			var reason string
-			if opts.DryRun {
-				steps, reason, err = s.planShare(m.cfg.Repo, w.Path)
-			} else {
-				steps, reason, err = m.seed(ctx, s, w.Path, false)
-			}
+			steps, reason, err = m.seed(ctx, s, seedRun{worktree: w.Path, dryRun: opts.DryRun})
 			out.Steps = append(out.Steps, steps...)
 			out.Reason = joinReason(out.Reason, reason)
 			if err != nil {
@@ -408,7 +440,7 @@ func (m *Manager) Remove(ctx context.Context, opts RemoveOptions) (out Outcome, 
 	if opts.DryRun {
 		return out, nil
 	}
-	if _, err := m.cfg.Git.Run(ctx, m.cfg.Repo, gitWorktree, "remove", w.Path); err != nil {
+	if _, err = m.cfg.Git.Run(ctx, m.cfg.Repo, gitWorktree, "remove", w.Path); err != nil {
 		return out, fmt.Errorf("gitworktree: remove %s: %w", w.Path, err)
 	}
 	return out, nil
@@ -460,7 +492,8 @@ func (m *Manager) Prune(ctx context.Context, opts PruneOptions) (outs []Outcome,
 		return nil, err
 	}
 	for _, w := range all {
-		out, err := m.pruneOne(ctx, w, ps, opts.DryRun)
+		var out Outcome
+		out, err = m.pruneOne(ctx, w, ps, opts.DryRun)
 		outs = append(outs, out)
 		if err != nil {
 			return outs, err
@@ -509,11 +542,26 @@ func (m *Manager) pruneOne(ctx context.Context, w Worktree, ps programs, dryRun 
 	return out, nil
 }
 
-func closedAs(pr forgeclient.BranchPR) string {
+func closedAs(pr pullrequest.PR) string {
 	if pr.Merged {
 		return "merged"
 	}
 	return "closed without merging"
+}
+
+// Stamp records, in the main checkout's folders for the named seed, the fingerprint of the inputs they hold now. Call
+// it straight after installing in the main checkout, so new worktrees compare their inputs with what was installed
+// rather than with whatever the main checkout's input files say later.
+func (m *Manager) Stamp(ctx context.Context, seed string) error {
+	if ctx == nil {
+		return errors.New("gitworktree: nil context")
+	}
+	for _, s := range m.cfg.Seeds {
+		if s.Name == seed {
+			return s.writeStamp(m.cfg.Repo, m.root)
+		}
+	}
+	return fmt.Errorf("gitworktree: no seed named %q", seed)
 }
 
 // pick returns the worktrees names stand for, or all of them when names is empty.

@@ -9,41 +9,49 @@ env:
 tasks:
   default:
     desc: List local-dev tasks
+    summary: Prints every task with its one-line description.
     cmds:
       - go tool task --list
 
   format:
     desc: Format with gofumpt
+    summary: Rewrites the Go files under cmd, internal and pkg in gofumpt style, in place.
     cmds:
       - go tool gofumpt -w ./cmd ./internal ./pkg
 
   lint:
     desc: Run golangci-lint
+    summary: Runs the pinned golangci-lint v2 with .golangci.yml over cmd, internal and pkg, with a five-minute limit.
     cmds:
       - go tool golangci-lint run --timeout 5m ./cmd/... ./internal/... ./pkg/...
 
   vet:
     desc: Run go vet
+    summary: Runs go vet over every package for this system. Vet the Linux build too with GOOS=linux go vet ./pkg/....
     cmds:
       - go vet ./...
 
   test:
     desc: Run unit tests with race
+    summary: Runs go test -race -count=1 over every package, offline. Clone and usage tests in pkg/gitworktree skip off macOS.
     cmds:
       - go test -race -count=1 ./...
 
   tidy:
     desc: go mod tidy
+    summary: Runs go mod tidy, so go.mod and go.sum list exactly what the code imports.
     cmds:
       - go mod tidy
 
   build:
     desc: Build gitvalet CLI
+    summary: Builds ./cmd/gitvalet into the gitvalet binary at the module root.
     cmds:
       - go build -o {{.BIN}} ./cmd/gitvalet
 
   smoke:
-    desc: CLI agent guide help version usage
+    desc: Build the CLI and smoke-test its agent guide, help, version and usage
+    summary: Builds the CLI, then runs the agent guide, help, -h, version, an unknown command (expects exit 2) and sync --dry-run.
     deps: [build]
     cmds:
       - ./{{.BIN}}
@@ -55,6 +63,7 @@ tasks:
 
   hooks-install:
     desc: Install .githooks pre-commit
+    summary: Points git at .githooks, so the pre-commit hook formats staged Go files with gofumpt. Run once per clone.
     cmds:
       - chmod +x .githooks/pre-commit
       - git config core.hooksPath .githooks

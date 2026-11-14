@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/behaviorengineering/gitvalet/pkg/forgeclient"
+	"github.com/behaviorengineering/gitvalet/pkg/pullrequest"
 )
 
 // fakePrograms is the running programs a test sets.
@@ -22,9 +22,9 @@ type fakePrograms []Program
 func (f *fakePrograms) Programs(context.Context) ([]Program, error) { return *f, nil }
 
 // fakePRs answers NewestPR from a map of branch to pull request.
-type fakePRs map[string]forgeclient.BranchPR
+type fakePRs map[string]pullrequest.PR
 
-func (f fakePRs) NewestPR(_ context.Context, branch string) (forgeclient.BranchPR, bool, error) {
+func (f fakePRs) NewestPR(_ context.Context, branch string) (pullrequest.PR, bool, error) {
 	pr, ok := f[branch]
 	return pr, ok, nil
 }
@@ -582,15 +582,14 @@ func TestSystemProgramsFindsThisTest(t *testing.T) {
 }
 
 // withoutClones makes the test act as a system whose file system cannot clone folders, such as Linux on ext4.
-func withoutClones(t *testing.T) {
-	t.Helper()
-	cloneFolder = func(string, string) error { return ErrUnsupported }
-	t.Cleanup(func() { cloneFolder = cloneTree })
+func (f *fixture) withoutClones() {
+	f.mgr.clone = func(string, string) error { return ErrUnsupported }
+	f.mgr.canClone = func(string, string) bool { return false }
 }
 
 func TestAddPreparesEverySeedWhereFoldersCannotBeCloned(t *testing.T) {
 	f := newFixture(t)
-	withoutClones(t)
+	f.withoutClones()
 	out := f.add("feat/linux")
 	if !slices.Equal(f.prepared, []string{"packages", "plugins"}) {
 		t.Fatalf("prepared %v, want both seeds", f.prepared)
@@ -607,15 +606,136 @@ func TestShareLeavesFoldersWhereTheyCannotBeCloned(t *testing.T) {
 	f := newFixture(t)
 	path := f.worktreeOf("wt-own", "feat/own")
 	f.write(path, app+"/node_modules/left-pad/index.js", "its own install\n")
-	withoutClones(t)
+	f.withoutClones()
 	outs, err := f.mgr.Share(ctx(t), ShareOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outs[0].Done || !strings.Contains(outs[0].Reason, "cannot clone") {
+	if outs[0].Done || !strings.Contains(outs[0].Reason, "cannot be cloned") {
 		t.Fatalf("outcome = %+v, want it left with a reason", outs[0])
 	}
 	if f.read(filepath.Join(path, app, "node_modules/left-pad/index.js")) != "its own install\n" {
 		t.Error("the worktree's own folder must be put back when the clone fails")
 	}
+}
+
+func TestShareDryRunMatchesTheRealRunWhereFoldersCannotBeCloned(t *testing.T) {
+	f := newFixture(t)
+	path := f.worktreeOf("wt-own", "feat/own")
+	f.write(path, app+"/node_modules/left-pad/index.js", "its own install\n")
+	f.withoutClones()
+	plan, err := f.mgr.Share(ctx(t), ShareOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	real, err := f.mgr.Share(ctx(t), ShareOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan[0].Done != real[0].Done || !slices.Equal(plan[0].Steps, real[0].Steps) || plan[0].Reason != real[0].Reason {
+		t.Fatalf("dry run %+v, real run %+v; want the same outcome", plan[0], real[0])
+	}
+}
+
+func TestRemoveRefusesAnEmptyNameAndKeepsADetachedWorktree(t *testing.T) {
+	f := newFixture(t)
+	path := filepath.Join(f.repo, "tmp", "wt-detached")
+	f.git(f.repo, "worktree", "add", "-q", "--detach", path, tag)
+	for _, name := range []string{"", "  "} {
+		if _, err := f.mgr.Remove(ctx(t), RemoveOptions{Name: name}); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Remove(%q): err = %v, want ErrNotFound", name, err)
+		}
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("the detached worktree must stay")
+	}
+}
+
+func TestSeedCheckRejectsDirsThatNameBaseItself(t *testing.T) {
+	for _, d := range []string{".", "./", "x/.."} {
+		s := Seed{Name: "x", Dirs: []string{d}, Inputs: []string{"a"}}
+		if err := s.check(); err == nil {
+			t.Errorf("Dirs %q: want an error", d)
+		}
+	}
+}
+
+func TestSeedDirsSkipGitAndTheWorktreeRoot(t *testing.T) {
+	f := newFixture(t)
+	f.worktreeOf("wt-x", "feat/x")
+	s := Seed{Name: "everything", Dirs: []string{"*"}, Inputs: []string{".gitignore"}}
+	dirs, err := s.dirs(f.repo, f.mgr.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(dirs, ".git") || slices.Contains(dirs, "tmp") || !slices.Contains(dirs, app) {
+		t.Fatalf("dirs = %q, want app without .git or tmp", dirs)
+	}
+}
+
+func TestAddPreparesWhenTheMainCheckoutsStampIsStale(t *testing.T) {
+	needsClones(t)
+	f := newFixture(t)
+	if err := f.mgr.Stamp(ctx(t), "packages"); err != nil {
+		t.Fatal(err)
+	}
+	// The main checkout's lockfile changes without a reinstall: its packages still match the old stamp.
+	f.write(f.repo, app+"/yarn.lock", "lock 2\n")
+	f.git(f.repo, "commit", "-q", "-am", "new lock, not installed")
+
+	out, err := f.mgr.Add(ctx(t), AddOptions{Branch: "feat/after-lock", From: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(f.prepared, "packages") {
+		t.Fatalf("prepared %v, want packages: the clone came from the old lockfile", f.prepared)
+	}
+	stamp := f.read(filepath.Join(out.Path, app, "node_modules", StampFile))
+	if stamp == f.read(filepath.Join(f.repo, app, "node_modules", StampFile)) {
+		t.Error("the worktree's stamp should be its own install's, not the main checkout's")
+	}
+}
+
+func TestAddSaysWhenTheMainCheckoutIsUnstamped(t *testing.T) {
+	needsClones(t)
+	f := newFixture(t)
+	out := f.add("feat/unstamped")
+	if !strings.Contains(out.Reason, "unstamped") {
+		t.Fatalf("reason = %q, want the unstamped note", out.Reason)
+	}
+	if err := f.mgr.Stamp(ctx(t), "packages"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.mgr.Stamp(ctx(t), "plugins"); err != nil {
+		t.Fatal(err)
+	}
+	if out = f.add("feat/stamped"); out.Reason != "" {
+		t.Errorf("reason = %q, want none once the main checkout is stamped", out.Reason)
+	}
+	if err := f.mgr.Stamp(ctx(t), "nope"); err == nil {
+		t.Error("want an error for a seed that does not exist")
+	}
+}
+
+func TestSystemProgramsFindsAProgramByItsWorkingFolder(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sleep", "30")
+	cmd.Dir = dir
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot start sleep: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	list, err := SystemPrograms{}.Programs(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range programs(list).using(dir) {
+		if p.PID == cmd.Process.Pid {
+			return
+		}
+	}
+	t.Fatalf("pid %d works in %s, but the busy check did not see it", cmd.Process.Pid, dir)
 }
