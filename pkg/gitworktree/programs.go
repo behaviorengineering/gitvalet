@@ -42,7 +42,7 @@ func (SystemPrograms) Programs(ctx context.Context) ([]Program, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := exec.CommandContext(ctx, ps, "-A", "-ww", "-o", "pid=,command=").Output()
+	out, err := exec.CommandContext(ctx, ps, "-A", "-ww", "-o", "pid=,command=").Output() // #nosec G204 -- a fixed system path and fixed arguments.
 	if err != nil {
 		return nil, fmt.Errorf("ps: %w", err)
 	}
@@ -58,7 +58,7 @@ func (SystemPrograms) Programs(ctx context.Context) ([]Program, error) {
 		byPID[list[i].PID] = &list[i]
 	}
 	var stdout bytes.Buffer
-	lsof := exec.CommandContext(ctx, lsofPath, "-n", "-P", "-w", "-d", "cwd", "-F", "pn")
+	lsof := exec.CommandContext(ctx, lsofPath, "-n", "-P", "-w", "-d", "cwd", "-F", "pn") // #nosec G204 -- a fixed system path and fixed arguments.
 	lsof.Stdout = &stdout
 	if err := lsof.Run(); err != nil && stdout.Len() == 0 {
 		return nil, fmt.Errorf("lsof: %w", err)
