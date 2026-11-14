@@ -34,7 +34,15 @@ func (SystemPrograms) Programs(ctx context.Context) ([]Program, error) {
 	if ctx == nil {
 		return nil, errors.New("gitworktree: nil context")
 	}
-	out, err := exec.CommandContext(ctx, "ps", "-A", "-ww", "-o", "pid=,command=").Output()
+	ps, err := systemTool("ps", "/bin/ps", "/usr/bin/ps")
+	if err != nil {
+		return nil, err
+	}
+	lsofPath, err := systemTool("lsof", "/usr/sbin/lsof", "/usr/bin/lsof", "/sbin/lsof")
+	if err != nil {
+		return nil, err
+	}
+	out, err := exec.CommandContext(ctx, ps, "-A", "-ww", "-o", "pid=,command=").Output()
 	if err != nil {
 		return nil, fmt.Errorf("ps: %w", err)
 	}
@@ -50,7 +58,7 @@ func (SystemPrograms) Programs(ctx context.Context) ([]Program, error) {
 		byPID[list[i].PID] = &list[i]
 	}
 	var stdout bytes.Buffer
-	lsof := exec.CommandContext(ctx, "lsof", "-n", "-P", "-w", "-d", "cwd", "-F", "pn")
+	lsof := exec.CommandContext(ctx, lsofPath, "-n", "-P", "-w", "-d", "cwd", "-F", "pn")
 	lsof.Stdout = &stdout
 	if err := lsof.Run(); err != nil && stdout.Len() == 0 {
 		return nil, fmt.Errorf("lsof: %w", err)
@@ -67,6 +75,17 @@ func (SystemPrograms) Programs(ctx context.Context) ([]Program, error) {
 		}
 	}
 	return list, nil
+}
+
+// systemTool returns the first of paths that exists. The busy check runs ps and lsof from the system's own folders,
+// never through PATH, because a program named ps earlier in PATH could hide a busy worktree from Remove.
+func systemTool(name string, paths ...string) (string, error) {
+	for _, p := range paths {
+		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("%s is not in %s; pass a ProgramLister instead", name, strings.Join(paths, ", "))
 }
 
 // programs is every running program, read once per method.
