@@ -466,6 +466,16 @@ func TestPruneRemovesClosedPullRequestsOnly(t *testing.T) {
 	if want := []string{"wt-closed", "wt-merged", "wt-moved-on"}; !slices.Equal(removed, want) {
 		t.Fatalf("removed %v, want %v", removed, want)
 	}
+	steps := map[string][]string{}
+	for _, o := range outs {
+		steps[o.Name] = o.Steps
+	}
+	if want := []string{"remove the worktree (pull request #1 merged)", stepDeleteBranch}; !slices.Equal(steps["wt-merged"], want) {
+		t.Errorf("merged steps = %q, want %q", steps["wt-merged"], want)
+	}
+	if want := []string{stepRemove + " (pull request #2 closed without merging)"}; !slices.Equal(steps["wt-closed"], want) {
+		t.Errorf("closed steps = %q, want %q", steps["wt-closed"], want)
+	}
 	branches := strings.Split(f.git(f.repo, "branch", "--format=%(refname:short)"), "\n")
 	if slices.Contains(branches, "feat/merged") {
 		t.Error("the merged branch should be deleted")

@@ -106,4 +106,4 @@ leaves the worktree as it is, and `Usage` returns `ErrUnsupported`. `Usage` read
 
 ## Releases (for agents)
 
-Default branch merges that change releasable code get patch tags via CI. Consumers pin `github.com/behaviorengineering/gitvalet@vX.Y.Z`.
+CI does not tag releases. After a merge to `main` that changes releasable code, a maintainer creates an annotated `vX.Y.Z` tag on the merge commit and pushes it on its own (`git push origin refs/tags/vX.Y.Z`). The tag push runs `.github/workflows/release.yml`, which publishes the GitHub release with GoReleaser. Consumers pin `github.com/behaviorengineering/gitvalet@vX.Y.Z`.
