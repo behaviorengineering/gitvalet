@@ -173,6 +173,7 @@ const (
 	stepFetch        = "fetch "
 	stepCreate       = "create the worktree"
 	stepRemove       = "remove the worktree; its branch stays"
+	stepRemoveOnly   = "remove the worktree"
 	stepDeleteBranch = "delete the merged branch"
 	reasonBusy       = "a program is using it"
 )
@@ -523,8 +524,12 @@ func (m *Manager) pruneOne(ctx context.Context, w Worktree, ps programs, dryRun 
 	if out.Reason, out.Users, err = m.keep(ctx, w, ps); err != nil || out.Reason != "" {
 		return out, err
 	}
-	out.Done, out.Steps = true, []string{fmt.Sprintf("%s (pull request #%d %s)", stepRemove, pr.Number, closedAs(pr))}
 	deleteBranch := pr.Merged && pr.HeadSHA == w.Head
+	remove := stepRemove
+	if deleteBranch {
+		remove = stepRemoveOnly
+	}
+	out.Done, out.Steps = true, []string{fmt.Sprintf("%s (pull request #%d %s)", remove, pr.Number, closedAs(pr))}
 	if deleteBranch {
 		out.Steps = append(out.Steps, stepDeleteBranch)
 	}
