@@ -51,11 +51,12 @@ type cloneSet struct {
 
 // UsageOptions say which checkouts to measure.
 type UsageOptions struct {
-	// Names picks worktrees by folder name, branch or path; empty means the main checkout and every worktree.
+	// Names picks worktrees by folder name, branch or path, and other checkouts by name or path; empty means the main
+	// checkout, every worktree and every other checkout that exists.
 	Names []string
 }
 
-// Usage measures, for the main checkout and each worktree, how much of its seed folders' disk is its own and how
+// Usage measures, for the main checkout, each worktree and each other checkout, how much of its seed folders' disk is its own and how
 // much it shares with files outside it. It reads each file's blocks from APFS, so the numbers hold however busy the
 // disk is. On a system without APFS it returns ErrUnsupported.
 func (m *Manager) Usage(ctx context.Context, opts UsageOptions) (usages []Usage, err error) {

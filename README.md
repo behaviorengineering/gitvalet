@@ -88,10 +88,16 @@ Without a stamp, the package trusts the main checkout's current inputs and says 
 | Method | What it does |
 |--------|--------------|
 | `Add` | Makes the worktree on a branch, creating the branch from `BaseRef` (fetched with `BaseFetch`) when it is new, then clones each seed whose inputs match and runs `Prepare` for each that differs. |
-| `Share` | Swaps an existing worktree's own seed folders for clones, seed by seed, where the inputs match. |
+| `Share` | Swaps an existing worktree's own seed folders for clones, seed by seed, where the inputs match. It covers `Others` too. |
 | `Remove` | Runs `git worktree remove` and keeps the branch. It returns `ErrKept` while a program uses the worktree or it has uncommitted or untracked files. |
 | `Prune` | Removes each worktree whose branch's newest pull request merged or closed, and deletes the local branch when it merged at exactly the local head. Pull requests from forks that reuse the branch name do not count. |
 | `Usage` | Reports, per checkout, what `du` would count, what the checkout alone holds, and what it shares with clones elsewhere. |
+
+A tool may keep checkouts of the same repository outside `Root`, such as a build folder it updates on its own.
+Name them in `Config.Others`, each with a `Name` and an absolute `Path`, and `Share` and `Usage` cover them too:
+their installs drift from the main checkout's as each one reinstalls, and `Share` swaps them back for clones. `List`,
+`Find`, `Add`, `Remove` and `Prune` never see them, so the package never removes one, and one that does not exist yet
+is skipped.
 
 Every method that changes a worktree takes `DryRun`, and a dry run decides through the same code as the real one.
 A program counts as using a worktree when its command line names a path inside it, or its working folder is inside
