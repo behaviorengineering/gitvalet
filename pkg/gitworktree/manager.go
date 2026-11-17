@@ -15,9 +15,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/behaviorengineering/olly/pkg/olly"
@@ -74,6 +76,9 @@ type Config struct {
 	BaseFetch string
 	// Seeds are the groups of ignored folders a worktree gets from the main checkout, in order.
 	Seeds []Seed
+	// Others are checkouts of the same repository outside Root that Share and Usage cover too, such as the folder a
+	// build tool keeps up to date. List, Find, Add, Remove and Prune never see them, so nothing here removes one.
+	Others []Checkout
 	// Git runs local git commands, with its Cred for the fetch too.
 	Git gitrun.Runner
 	// Exec runs the fetch from origin, with retries, a circuit breaker and spans. Nil uses gitexec.New().
@@ -122,6 +127,9 @@ func (cfg Config) CreateManager() (*Manager, error) {
 		return nil, fmt.Errorf("gitworktree: find the main checkout %s: %w", cfg.Repo, err)
 	}
 	cfg.Repo = resolved
+	if err := checkOthers(cfg.Others, resolved, filepath.Join(resolved, cfg.Root)); err != nil {
+		return nil, err
+	}
 	if cfg.Programs == nil {
 		cfg.Programs = SystemPrograms{}
 	}
@@ -140,7 +148,39 @@ func (cfg Config) CreateManager() (*Manager, error) {
 	}, nil
 }
 
-// Worktree is one worktree under the root.
+// Checkout is a checkout of the repository outside the root that Share and Usage cover too.
+type Checkout struct {
+	// Name names it in outcomes and usages, such as "runner", and picks it in ShareOptions and UsageOptions.
+	Name string
+	// Path is its top folder: an absolute path outside the main checkout. One that does not exist yet is skipped.
+	Path string
+}
+
+// checkOthers checks that each other checkout has its own name and sits outside the main checkout, where no worktree
+// can be.
+func checkOthers(others []Checkout, repo, root string) error {
+	seen := map[string]bool{MainName: true}
+	for i, o := range others {
+		if !validName.MatchString(o.Name) || seen[o.Name] {
+			return fmt.Errorf("gitworktree: Config.Others[%d]: name %q must be a unique folder-style name", i, o.Name)
+		}
+		seen[o.Name] = true
+		if !filepath.IsAbs(o.Path) {
+			return fmt.Errorf("gitworktree: Config.Others[%d]: path %q must be absolute", i, o.Path)
+		}
+		// A checkout that exists is compared by its real path, as git lists worktrees.
+		path := filepath.Clean(o.Path)
+		if real, err := filepath.EvalSymlinks(path); err == nil {
+			path = real
+		}
+		if inside(path, repo) || inside(repo, path) || inside(root, path) {
+			return fmt.Errorf("gitworktree: Config.Others[%d]: path %q must be outside the main checkout", i, o.Path)
+		}
+	}
+	return nil
+}
+
+// Worktree is one worktree under the root, or one of Config.Others.
 type Worktree struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
@@ -183,6 +223,49 @@ func (m *Manager) List(ctx context.Context) ([]Worktree, error) {
 	if ctx == nil {
 		return nil, errors.New("gitworktree: nil context")
 	}
+	all, err := m.listAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var under []Worktree
+	for _, w := range all {
+		if inside(w.Path, m.root) && w.Path != m.root {
+			under = append(under, w)
+		}
+	}
+	return under, nil
+}
+
+// others returns the other checkouts that exist, with the branch and HEAD git lists for each one that is a worktree
+// of the main checkout.
+func (m *Manager) others(ctx context.Context) ([]Worktree, error) {
+	if len(m.cfg.Others) == 0 {
+		return nil, nil
+	}
+	all, err := m.listAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var found []Worktree
+	for _, o := range m.cfg.Others {
+		path, err := filepath.EvalSymlinks(o.Path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("gitworktree: find %s at %s: %w", o.Name, o.Path, err)
+		}
+		w := Worktree{Name: o.Name, Path: path}
+		if i := slices.IndexFunc(all, func(l Worktree) bool { return l.Path == path }); i >= 0 {
+			w.Branch, w.Head = all[i].Branch, all[i].Head
+		}
+		found = append(found, w)
+	}
+	return found, nil
+}
+
+// listAll returns every worktree git lists for the main checkout, the main checkout first.
+func (m *Manager) listAll(ctx context.Context) ([]Worktree, error) {
 	out, err := m.cfg.Git.RunTrim(ctx, m.cfg.Repo, gitWorktree, "list", "--porcelain")
 	if err != nil {
 		return nil, fmt.Errorf("gitworktree: list worktrees: %w", err)
@@ -205,13 +288,7 @@ func (m *Manager) List(ctx context.Context) ([]Worktree, error) {
 			}
 		}
 	}
-	var under []Worktree
-	for _, w := range all {
-		if inside(w.Path, m.root) && w.Path != m.root {
-			under = append(under, w)
-		}
-	}
-	return under, nil
+	return all, nil
 }
 
 // Find returns the worktree a name stands for: its folder name with or without the prefix, its branch, or its path.
@@ -360,14 +437,15 @@ func (m *Manager) fetchBase(ctx context.Context) error {
 
 // ShareOptions say which worktrees to slim.
 type ShareOptions struct {
-	// Names picks worktrees by folder name, branch or path; empty means every worktree under the root.
+	// Names picks worktrees by folder name, branch or path, and other checkouts by name or path; empty means every
+	// worktree under the root and every other checkout that exists.
 	Names  []string
 	DryRun bool
 }
 
-// Share swaps the seed folders of existing worktrees for clones of the main checkout's, seed by seed, where the
-// seed's inputs match. It leaves a worktree a program is using, a seed the worktree has no folders for, and a seed
-// whose inputs differ, since those folders are not the main checkout's.
+// Share swaps the seed folders of existing worktrees, and of the other checkouts in Config.Others, for clones of the
+// main checkout's, seed by seed, where the seed's inputs match. It leaves a checkout a program is using, a seed the
+// checkout has no folders for, and a seed whose inputs differ, since those folders are not the main checkout's.
 func (m *Manager) Share(ctx context.Context, opts ShareOptions) (outs []Outcome, err error) {
 	if ctx == nil {
 		return nil, errors.New("gitworktree: nil context")
@@ -569,13 +647,26 @@ func (m *Manager) Stamp(ctx context.Context, seed string) error {
 	return fmt.Errorf("gitworktree: no seed named %q", seed)
 }
 
-// pick returns the worktrees names stand for, or all of them when names is empty.
+// pick returns what Share and Usage act on: the worktrees and other checkouts names stand for, or, when names is
+// empty, every worktree under the root and then every other checkout that exists.
 func (m *Manager) pick(ctx context.Context, names []string) ([]Worktree, error) {
+	others, err := m.others(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if len(names) == 0 {
-		return m.List(ctx)
+		under, err := m.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return append(under, others...), nil
 	}
 	picked := make([]Worktree, 0, len(names))
 	for _, n := range names {
+		if o, ok := findOther(others, n); ok {
+			picked = append(picked, o)
+			continue
+		}
 		w, err := m.Find(ctx, n)
 		if err != nil {
 			return nil, err
@@ -583,6 +674,23 @@ func (m *Manager) pick(ctx context.Context, names []string) ([]Worktree, error) 
 		picked = append(picked, w)
 	}
 	return picked, nil
+}
+
+// findOther returns the other checkout a name stands for: its name in Config.Others, or its path.
+func findOther(others []Worktree, name string) (Worktree, bool) {
+	abs, err := filepath.Abs(name)
+	if err != nil {
+		abs = ""
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real
+	}
+	for _, o := range others {
+		if o.Name == name || o.Path == abs {
+			return o, true
+		}
+	}
+	return Worktree{}, false
 }
 
 // programs reads the running programs once for a method.
